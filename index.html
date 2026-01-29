@@ -1244,36 +1244,100 @@ window.addEventListener('mousemove', (e) => {
   updateTargetRotationFromMouse();
 });
 
+
 let touchTapStart = 0;
 let touchTapCount = 0;
+
+let pinchLastDist = 0;
+
+function getTouchDist(t0, t1) {
+  const dx = t0.clientX - t1.clientX;
+  const dy = t0.clientY - t1.clientY;
+  return Math.hypot(dx, dy);
+}
+
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+// delta is wheel-like (same meaning as e.deltaY): positive = zoom out, negative = zoom in
+function applyZoomDelta(delta) {
+  state.zoom *= Math.exp(delta * config.cameraZoomSpeed);
+  state.zoom = clamp(state.zoom, config.cameraZoomMin, config.cameraZoomMax);
+
+  state.fov += delta * config.fovWheelSpeed;
+  state.fov = clamp(state.fov, config.fovMin, config.fovMax);
+
+  camera.fov = state.fov;
+  camera.updateProjectionMatrix();
+}
 
 window.addEventListener('touchstart', (e) => {
   touchTapStart = performance.now();
   touchTapCount = e.touches.length;
 
-  if (e.touches.length > 0) {
+  // 1 finger: rotate, same mapping as mouse
+  if (e.touches.length === 1) {
     const t = e.touches[0];
     state.mouse.x = (t.clientX / window.innerWidth) * 2 - 1;
     state.mouse.y = -(t.clientY / window.innerHeight) * 2 + 1;
+
+    e.preventDefault();
+
+    if (!state.interactionEnabled) return;
+    updateTargetRotationFromMouse();
+    return;
   }
 
-  if (touchTapCount >= 2) e.preventDefault();
+  // 2 fingers: init pinch
+  if (e.touches.length === 2) {
+    pinchLastDist = getTouchDist(e.touches[0], e.touches[1]);
+    e.preventDefault();
+    return;
+  }
 
-  if (!state.interactionEnabled) return;
-  updateTargetRotationFromMouse();
+  // 3+ fingers: keep default taps logic, but block browser gestures
+  if (e.touches.length >= 3) {
+    e.preventDefault();
+  }
 }, { passive: false });
 
 window.addEventListener('touchmove', (e) => {
   if (e.touches.length === 0) return;
 
-  const t = e.touches[0];
-  state.mouse.x = (t.clientX / window.innerWidth) * 2 - 1;
-  state.mouse.y = -(t.clientY / window.innerHeight) * 2 + 1;
+  // 1 finger rotate
+  if (e.touches.length === 1) {
+    const t = e.touches[0];
+    state.mouse.x = (t.clientX / window.innerWidth) * 2 - 1;
+    state.mouse.y = -(t.clientY / window.innerHeight) * 2 + 1;
+
+    e.preventDefault();
+
+    if (!state.interactionEnabled) return;
+    updateTargetRotationFromMouse();
+    return;
+  }
+
+  // 2 finger pinch: emulate wheel delta and reuse the same zoom+fov math
+  if (e.touches.length === 2) {
+    const dist = getTouchDist(e.touches[0], e.touches[1]);
+    if (!pinchLastDist) pinchLastDist = dist;
+
+    // dist grows on pinch-out -> want zoom in -> wheel delta should be negative
+    const distDelta = dist - pinchLastDist;
+
+    // tuning: pixels of pinch distance to wheel deltaY units
+    const pinchToWheel = 2.8;
+    const wheelLikeDelta = -distDelta * pinchToWheel;
+
+    if (state.interactionEnabled) applyZoomDelta(wheelLikeDelta);
+
+    pinchLastDist = dist;
+    e.preventDefault();
+    return;
+  }
 
   e.preventDefault();
-
-  if (!state.interactionEnabled) return;
-  updateTargetRotationFromMouse();
 }, { passive: false });
 
 window.addEventListener('touchend', () => {
@@ -1285,17 +1349,15 @@ window.addEventListener('touchend', () => {
   }
 
   touchTapCount = 0;
-});
+  pinchLastDist = 0;
+}, { passive: false });
 
 window.addEventListener('wheel', (e) => {
-  state.zoom *= Math.exp(e.deltaY * config.cameraZoomSpeed);
-  state.zoom = Math.max(config.cameraZoomMin, Math.min(config.cameraZoomMax, state.zoom));
+  if (!state.interactionEnabled) return;
+  e.preventDefault();
+  applyZoomDelta(e.deltaY);
+}, { passive: false });
 
-  state.fov += e.deltaY * config.fovWheelSpeed;
-  state.fov = Math.max(config.fovMin, Math.min(config.fovMax, state.fov));
-  camera.fov = state.fov;
-  camera.updateProjectionMatrix();
-}, { passive: true });
 
 window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
